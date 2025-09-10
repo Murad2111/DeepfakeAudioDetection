@@ -60,12 +60,10 @@ def convert_dataset():
     return  ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc
 
 
-def safe_dataset(test_label, train_label, val_label, test_mfcc, train_mfcc, val_mfcc):
+def safe_dataset(test_label, train_label, val_label, test_mfcc, train_mfcc, val_mfcc, path):
     """
     safes the given DataFrames as 3 parquet files
     """
-    path = os.getcwd() + r"\..\data\processed\parquet"
-
     np.save(path+r"\test_labels.npy", test_label)
     np.save(path + r"\train_labels.npy", train_label)
     np.save(path + r"\val_labels.npy", val_label)
@@ -75,16 +73,29 @@ def safe_dataset(test_label, train_label, val_label, test_mfcc, train_mfcc, val_
     np.save(path + r"\val_features.npy", val_mfcc)
 
 
-def check_processed_dataset():
+def do_files_exist(path):
     """
     checks if the processed dataset exists
     :return: true if dataset exists, false if not
     """
-    path = os.getcwd() + r"\..\data\processed\parquet"
     if not os.path.exists(path) or not os.path.isdir(path):
         os.mkdir(path)
 
     return os.path.isfile(path+ r"\val_features.npy")
+
+
+def check_processed_datasets(path):
+    """
+    makes sure all necessary datasets exist
+    """
+    if not do_files_exist(path):
+        print("processed datasets does not exist yet")
+        print("-----------------converting datasets-------------------------")
+        ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc = convert_dataset()
+        safe_dataset(ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc, path)
+        print("--------------finished converting datasets------------------")
+    else:
+        print("found processed datasets")
 
 
 def do_some_tests():
@@ -113,6 +124,5 @@ def do_some_tests():
 
 if __name__ == "__main__":
     #do_some_tests()
-    if not check_processed_dataset():
-        ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc = convert_dataset()
-        safe_dataset(ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc)
+    path = os.getcwd() + r"\..\data\processed\parquet"
+    check_processed_datasets(path)
