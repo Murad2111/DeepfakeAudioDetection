@@ -5,6 +5,7 @@ import numpy as np
 import os
 import load_data
 import gc
+import plotting
 
 #-----------------------------classes--------------------------------------------------------------
 class ResidualBlock(nn.Module):
@@ -32,21 +33,23 @@ class ConvNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
         act_fn = nn.ReLU()
+        pool = nn.MaxPool2d(kernel_size=(1,2), stride=(1,2))#not symmetric because our input dimensions are (13,400) worst case
         self.convLayers = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=16, kernel_size=2), act_fn,
-            nn.AvgPool2d(kernel_size=(1,2), stride=(1,2)),#not symmetric because our input dimensions are (13,400) worst case
+            pool,
             nn.Conv2d(in_channels=16, out_channels=32, kernel_size=2), act_fn,
-            nn.AvgPool2d(kernel_size=(1, 2), stride=(1, 2)),
+            pool,
             ResidualBlock(32, 32, act_fn=act_fn),
-            nn.AvgPool2d(kernel_size=(1,2), stride=(1,2)),
-            #ResidualBlock(32, 32, act_fn=act_fn),#maybe overkill
-            #nn.AvgPool2d(kernel_size=(1,2), stride=(1,2)),
+            pool,
+            ResidualBlock(32, 32, act_fn=act_fn),#maybe overkill
+            pool,
             nn.Conv2d(in_channels=32, out_channels=16, kernel_size=2), act_fn,
-            nn.AvgPool2d(kernel_size=(1, 2), stride=(1, 2))
+            pool,
         )
 
         self.fullyConnected = nn.Sequential(
-            nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
+            #nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
+            nn.Linear(1920, 120),
             act_fn,
             nn.Linear(120, 84),
             act_fn,
@@ -70,6 +73,13 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
     """
     copied from exercise for now
     """
+    train_loss_list = []
+    train_acc_list = []
+    val_loss_list = []
+    val_acc_list = []
+    early_stopping_iter = 0
+    final_epoch = 0
+
     loss_fn = torch.nn.BCELoss() #our network should output a single probability imo
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
 
@@ -77,7 +87,9 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
     num_epochs_without_val_loss_reduction = 0
     early_stopping_window = 5
 
+    model.train()
     for epoch in range(epochs):
+        final_epoch = epoch
         running_train_loss = 0
         running_val_loss = 0
 
@@ -104,25 +116,35 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
                 num_train_samples_so_far += len(x)
 
                 if i % 10 == 0:
-                    train_epoch_pbar.set_postfix(train_loss=running_train_loss.item() / num_train_samples_so_far,
-                                                 accuracy=(correct_train_preds.item() / num_train_samples_so_far) * 100)
+                    train_loss = running_train_loss.item() / num_train_samples_so_far
+                    accuracy = (correct_train_preds.item() / num_train_samples_so_far) * 100
+                    train_loss_list.append(train_loss)
+                    train_acc_list.append(accuracy)
+                    train_epoch_pbar.set_postfix(train_loss=train_loss,
+                                                 accuracy=accuracy)
 
         num_val_samples_so_far = 0
         # iterate the val data
-        with tqdm(val_loader, desc="Validating") as val_epoch_pbar:
-            for i, (x, y) in enumerate(val_epoch_pbar):
-                x, y = x.to(device), y.to(device)
-                out_prob = network(x)
-                loss = loss_fn(out_prob, y)
+        model.eval()
+        with torch.no_grad():
+            with tqdm(val_loader, desc="Validating") as val_epoch_pbar:
+                for i, (x, y) in enumerate(val_epoch_pbar):
+                    x, y = x.to(device), y.to(device)
+                    out_prob = network(x)
+                    loss = loss_fn(out_prob, y)
 
-                running_val_loss += loss * len(x)
-                preds = (out_prob > 0.5).float().squeeze()
-                correct_val_preds += (preds == y.squeeze()).sum()
-                num_val_samples_so_far += len(x)
+                    running_val_loss += loss * len(x)
+                    preds = (out_prob > 0.5).float().squeeze()
+                    correct_val_preds += (preds == y.squeeze()).sum()
+                    num_val_samples_so_far += len(x)
 
-                if i % 10 == 0:
-                    val_epoch_pbar.set_postfix(train_loss=running_val_loss.item() / num_val_samples_so_far,
-                                               accuracy=correct_val_preds.item() / num_val_samples_so_far * 100)
+                    if i % 10 == 0:
+                        val_loss = running_val_loss.item() / num_val_samples_so_far,
+                        accuracy = correct_val_preds.item() / num_val_samples_so_far * 100
+                        val_loss_list.append(val_loss)
+                        val_acc_list.append(accuracy)
+                        val_epoch_pbar.set_postfix(val_loss=val_loss,
+                                                   accuracy=accuracy)
 
         avg_train_loss = running_train_loss.item() / num_train_samples_so_far
         train_acc = correct_train_preds.item() / num_train_samples_so_far * 100
@@ -133,11 +155,13 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
             f'Epoch {epoch}: \tAvg Train Loss: {avg_train_loss:.2f} \tTrain Acc: {train_acc:.2f} \tAvg Val Loss: {avg_val_loss:.2f} \tVal Acc: {val_acc:.2f}')
 
         # perform early stopping if necessary
-        if avg_val_loss <= best_model_valid_loss:
+        if avg_val_loss < best_model_valid_loss:
             print(f'Validation loss decreased ({best_model_valid_loss:.6f} --> {avg_val_loss:.6f}).  Saving model ...')
             torch.save(network.state_dict(), checkpoint_path+ r'\model.pt')
-            best_model_valid_loss = avg_val_loss
             num_epochs_without_val_loss_reduction = 0
+            best_model_valid_loss = avg_val_loss
+
+            early_stopping_iter = len(train_loss_list)-1
         else:
             num_epochs_without_val_loss_reduction += 1
 
@@ -145,6 +169,9 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
             # if we haven't had a reduction in validation loss for `early_stopping_window` epochs, then stop training
             print(f'No reduction in validation loss for {early_stopping_window} epochs. Stopping training...')
             break
+
+    return (np.array(train_loss_list), np.array(train_acc_list), np.array(val_loss_list),
+            np.array(val_acc_list), early_stopping_iter, final_epoch+1)
 
 
 def test_nn(network, test_loader, device):
@@ -167,7 +194,7 @@ def test_nn(network, test_loader, device):
                 num_test_samples_so_far += len(x)
 
                 if i % 10 == 0:
-                    test_pbar.set_postfix(train_loss=running_test_loss.item() / num_test_samples_so_far,
+                    test_pbar.set_postfix(test_loss=running_test_loss.item() / num_test_samples_so_far,
                                                accuracy=correct_test_preds.item() / num_test_samples_so_far * 100)
 
     avg_test_loss = running_test_loss.item() / num_test_samples_so_far
@@ -180,7 +207,7 @@ def test_nn(network, test_loader, device):
 
 if __name__ == "__main__":
     path = os.getcwd() + r"\..\data\processed\parquet"
-    test_loader, train_loader, val_loader = load_data.create_data_loaders(path)
+    test_loader, train_loader, val_loader = load_data.create_data_loaders(path, batch_size=8)
     #longest_sequence = load_data._find_largest_sequence(test_loader, train_loader, val_loader)
     #print("longest sequence in the dataset: " + str(longest_sequence))
 
@@ -188,14 +215,17 @@ if __name__ == "__main__":
     print("using device: " + str(device))
     model = ConvNet().to(device)
     checkpoint_path = os.getcwd() + r"\..\checkpoints"
-    train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-3)
+    train_loss_list, train_acc_list, val_loss_list, val_acc_list, early_stopping_iter, epoch_nr = (
+        train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-3))  #training
+
+    plot_path = os.getcwd() + r"\..\plots"
+    plotting.plot_loss(train_loss_list, val_loss_list, early_stopping_iter, plot_path, epoch_nr)
+    plotting.plot_acc(train_acc_list, val_acc_list, early_stopping_iter, plot_path, epoch_nr)
 
     del train_loader, val_loader  #free up memory
     torch.cuda.empty_cache()
     gc.collect()
 
-    model = ConvNet()  # init the model
+    model = ConvNet().to(device)  # init the model
     model.load_state_dict(torch.load(checkpoint_path + r"\model.pt"))
     test_nn(model, test_loader, device)
-
-
