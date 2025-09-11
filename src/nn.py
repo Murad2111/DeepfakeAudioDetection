@@ -1,54 +1,77 @@
-import torch.nn.functional as F
 import torch.nn as nn
 from tqdm.auto import tqdm
 import torch
 import numpy as np
 import os
 import load_data
+import gc
 
 #-----------------------------classes--------------------------------------------------------------
+class ResidualBlock(nn.Module):
+    def __init__(self, inout_channels, hidden_channels, act_fn=nn.ReLU(), kernel_size=2):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(inout_channels, hidden_channels, kernel_size=kernel_size, padding=int(kernel_size/2)),
+            act_fn,
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=kernel_size, padding=int(kernel_size/2)),
+            act_fn,
+            nn.Conv2d(hidden_channels, inout_channels, kernel_size=kernel_size, padding=int(kernel_size/2)),
+            act_fn
+        )
+
+    def forward(self, x):
+        out = self.conv(x)
+        out = out[:, :, :x.size(2), :x.size(3)]
+        return x + out  # residual connection
+
+
 class ConvNet(torch.nn.Module):
     """
     change this later
     """
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=4)
-        self.conv2 = nn.Conv2d(in_channels=6, out_channels=16, kernel_size=4)
+        act_fn = nn.ReLU()
+        self.convLayers = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=2), act_fn,
+            nn.AvgPool2d(kernel_size=(1,2), stride=(1,2)),#not symmetric because our input dimensions are (13,400) worst case
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=2), act_fn,
+            nn.AvgPool2d(kernel_size=(1, 2), stride=(1, 2)),
+            ResidualBlock(32, 32, act_fn=act_fn),
+            nn.AvgPool2d(kernel_size=(1,2), stride=(1,2)),
+            #ResidualBlock(32, 32, act_fn=act_fn),#maybe overkill
+            #nn.AvgPool2d(kernel_size=(1,2), stride=(1,2)),
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=2), act_fn,
+            nn.AvgPool2d(kernel_size=(1, 2), stride=(1, 2))
+        )
 
-        self.pool = nn.AvgPool2d(kernel_size=2, stride=2)
-
-        self.fc1 = nn.Linear(1616, 120) #out_channels*x_cur*y_cur
-        self.fc2 = nn.Linear(120, 84)
-        self.output = nn.Linear(84, 1)
+        self.fullyConnected = nn.Sequential(
+            nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
+            act_fn,
+            nn.Linear(120, 84),
+            act_fn,
+            nn.Linear(84, 1),
+            nn.Sigmoid(),#for probability as output
+        )
 
     def forward(self, x):
-        x = F.sigmoid(self.conv1(x))
-        x = self.pool(x)
-
-        x = F.sigmoid(self.conv2(x))
-        x = self.pool(x)
+        x = self.convLayers(x)
 
         # flatten the convolution results
         x = x.view(x.size(0), -1)  #out_channels*x_cur*y_cur
 
-        x = F.sigmoid(self.fc1(x))
-        x = F.sigmoid(self.fc2(x))
+        x = self.fullyConnected(x)
 
-        return self.output(x)
+        return x
 
 
 #------------------------------utility functions----------------------------------------
-def train(network, train_loader, val_loader, test_loader, device, epochs=200, lr=1e-3):
+def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-3):
     """
     copied from exercise for now
     """
-    loss_fn = torch.nn.BCEWithLogitsLoss() #our network should output a single probability imo
+    loss_fn = torch.nn.BCELoss() #our network should output a single probability imo
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
-
-    num_train_samples = (len(train_loader) * train_loader.batch_size)
-    num_val_samples = (len(val_loader) * val_loader.batch_size)
-    num_test_samples = (len(test_loader) * test_loader.batch_size)
 
     best_model_valid_loss = np.Inf
     num_epochs_without_val_loss_reduction = 0
@@ -60,6 +83,7 @@ def train(network, train_loader, val_loader, test_loader, device, epochs=200, lr
 
         correct_train_preds = 0
         correct_val_preds = 0
+        num_train_samples_so_far = 0
 
         # iterate the training data
         with tqdm(train_loader, desc="Training") as train_epoch_pbar:
@@ -67,39 +91,43 @@ def train(network, train_loader, val_loader, test_loader, device, epochs=200, lr
                 x, y = x.to(device), y.to(device)
 
                 optimizer.zero_grad()
-                logits = network(x)
-                loss = loss_fn(logits, y)
+                out_prob = network(x)
+                loss = loss_fn(out_prob, y)
                 loss.backward()
                 optimizer.step()
 
                 running_train_loss += loss * len(x)
-                correct_train_preds += (logits.argmax(-1) == y).sum()
+                preds = (out_prob > 0.5).float().squeeze()
+                correct_train_preds += (preds == y.squeeze()).sum()
+                #print((preds == y))
+
+                num_train_samples_so_far += len(x)
 
                 if i % 10 == 0:
-                    # we can divide by (i * len(x)) because we are dropping the last batch
-                    num_train_samples_so_far = (i + 1) * len(x)
                     train_epoch_pbar.set_postfix(train_loss=running_train_loss.item() / num_train_samples_so_far,
-                                                 accuracy=correct_train_preds.item() / num_train_samples_so_far * 100)
+                                                 accuracy=(correct_train_preds.item() / num_train_samples_so_far) * 100)
 
+        num_val_samples_so_far = 0
         # iterate the val data
         with tqdm(val_loader, desc="Validating") as val_epoch_pbar:
             for i, (x, y) in enumerate(val_epoch_pbar):
                 x, y = x.to(device), y.to(device)
-                logits = network(x)
-                loss = loss_fn(logits, y)
+                out_prob = network(x)
+                loss = loss_fn(out_prob, y)
 
                 running_val_loss += loss * len(x)
-                correct_val_preds += (logits.argmax(-1) == y).sum()
+                preds = (out_prob > 0.5).float().squeeze()
+                correct_val_preds += (preds == y.squeeze()).sum()
+                num_val_samples_so_far += len(x)
 
                 if i % 10 == 0:
-                    num_val_samples_so_far = (i + 1) * len(x)
                     val_epoch_pbar.set_postfix(train_loss=running_val_loss.item() / num_val_samples_so_far,
                                                accuracy=correct_val_preds.item() / num_val_samples_so_far * 100)
 
-        avg_train_loss = running_train_loss.item() / num_train_samples
-        train_acc = correct_train_preds.item() / num_train_samples * 100
-        avg_val_loss = running_val_loss.item() / num_val_samples
-        val_acc = correct_val_preds.item() / num_val_samples * 100
+        avg_train_loss = running_train_loss.item() / num_train_samples_so_far
+        train_acc = correct_train_preds.item() / num_train_samples_so_far * 100
+        avg_val_loss = running_val_loss.item() / num_val_samples_so_far
+        val_acc = correct_val_preds.item() / num_val_samples_so_far * 100
 
         print(
             f'Epoch {epoch}: \tAvg Train Loss: {avg_train_loss:.2f} \tTrain Acc: {train_acc:.2f} \tAvg Val Loss: {avg_val_loss:.2f} \tVal Acc: {val_acc:.2f}')
@@ -107,7 +135,7 @@ def train(network, train_loader, val_loader, test_loader, device, epochs=200, lr
         # perform early stopping if necessary
         if avg_val_loss <= best_model_valid_loss:
             print(f'Validation loss decreased ({best_model_valid_loss:.6f} --> {avg_val_loss:.6f}).  Saving model ...')
-            torch.save(network.state_dict(), 'model.pt')
+            torch.save(network.state_dict(), checkpoint_path+ r'\model.pt')
             best_model_valid_loss = avg_val_loss
             num_epochs_without_val_loss_reduction = 0
         else:
@@ -118,25 +146,32 @@ def train(network, train_loader, val_loader, test_loader, device, epochs=200, lr
             print(f'No reduction in validation loss for {early_stopping_window} epochs. Stopping training...')
             break
 
+
+def test_nn(network, test_loader, device):
+    loss_fn = torch.nn.BCELoss()  # our network should output a single probability imo
     running_test_loss = 0
     correct_test_preds = 0
-    # only after finishing training we are testing our model
-    with tqdm(test_loader, desc="Testing") as test_pbar:
-        for i, (x, y) in enumerate(test_pbar):
-            x, y = x.to(device), y.to(device)
-            logits = network(x)
-            loss = loss_fn(logits, y)
+    num_test_samples_so_far = 0
 
-            running_test_loss += loss * len(x)
-            correct_test_preds += (logits.argmax(-1) == y).sum()
+    model.eval()
+    with torch.no_grad(): #dont track gradient info
+        with tqdm(test_loader, desc="Testing") as test_pbar:
+            for i, (x, y) in enumerate(test_pbar):
+                x, y = x.to(device), y.to(device)
+                out_prob = network(x)
+                loss = loss_fn(out_prob, y)
 
-            if i % 10 == 0:
-                num_test_samples_so_far = (i + 1) * len(x)
-                val_epoch_pbar.set_postfix(train_loss=running_test_loss.item() / num_test_samples_so_far,
-                                           accuracy=correct_test_preds.item() / num_test_samples_so_far * 100)
+                running_test_loss += loss * len(x)
+                preds = (out_prob > 0.5).float().squeeze()
+                correct_test_preds += (preds == y.squeeze()).sum()
+                num_test_samples_so_far += len(x)
 
-    avg_test_loss = running_test_loss.item() / num_test_samples
-    test_acc = correct_test_preds.item() / num_test_samples * 100
+                if i % 10 == 0:
+                    test_pbar.set_postfix(train_loss=running_test_loss.item() / num_test_samples_so_far,
+                                               accuracy=correct_test_preds.item() / num_test_samples_so_far * 100)
+
+    avg_test_loss = running_test_loss.item() / num_test_samples_so_far
+    test_acc = correct_test_preds.item() / num_test_samples_so_far * 100
 
     print(f'Test Set: \tAvg Test Loss: {avg_test_loss:.2f} \tTest Acc: {test_acc:.2f}')
 
@@ -149,8 +184,18 @@ if __name__ == "__main__":
     #longest_sequence = load_data._find_largest_sequence(test_loader, train_loader, val_loader)
     #print("longest sequence in the dataset: " + str(longest_sequence))
 
-    device = "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("using device: " + str(device))
     model = ConvNet().to(device)
-    train(model, train_loader, val_loader, test_loader, device, epochs=200, lr=1e-3)
+    checkpoint_path = os.getcwd() + r"\..\checkpoints"
+    train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-3)
+
+    del train_loader, val_loader  #free up memory
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    model = ConvNet()  # init the model
+    model.load_state_dict(torch.load(checkpoint_path + r"\model.pt"))
+    test_nn(model, test_loader, device)
 
 
