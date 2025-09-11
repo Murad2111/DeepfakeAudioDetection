@@ -69,7 +69,7 @@ class ConvNet(torch.nn.Module):
 
 
 #------------------------------utility functions----------------------------------------
-def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-3):
+def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-4, regularization=1e-4):
     """
     copied from exercise for now
     """
@@ -81,21 +81,23 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
     final_epoch = 0
 
     loss_fn = torch.nn.BCELoss() #our network should output a single probability imo
-    optimizer = torch.optim.Adam(network.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(network.parameters(), lr=lr, weight_decay=regularization)
 
     best_model_valid_loss = np.Inf
     num_epochs_without_val_loss_reduction = 0
     early_stopping_window = 5
 
+    running_train_loss = 0
+    running_val_loss = 0
+    correct_train_preds = 0
+    correct_val_preds = 0
+    num_train_samples_so_far = 0
+    num_val_samples_so_far = 0
+
+    #-----------------------------------------train------------------------
     model.train()
     for epoch in range(epochs):
         final_epoch = epoch
-        running_train_loss = 0
-        running_val_loss = 0
-
-        correct_train_preds = 0
-        correct_val_preds = 0
-        num_train_samples_so_far = 0
 
         # iterate the training data
         with tqdm(train_loader, desc="Training") as train_epoch_pbar:
@@ -123,8 +125,8 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
                     train_epoch_pbar.set_postfix(train_loss=train_loss,
                                                  accuracy=accuracy)
 
-        num_val_samples_so_far = 0
-        # iterate the val data
+
+        # --------------------------------------val----------------------------
         model.eval()
         with torch.no_grad():
             with tqdm(val_loader, desc="Validating") as val_epoch_pbar:
@@ -216,7 +218,7 @@ if __name__ == "__main__":
     model = ConvNet().to(device)
     checkpoint_path = os.getcwd() + r"\..\checkpoints"
     train_loss_list, train_acc_list, val_loss_list, val_acc_list, early_stopping_iter, epoch_nr = (
-        train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-3))  #training
+        train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-5))  #training
 
     plot_path = os.getcwd() + r"\..\plots"
     plotting.plot_loss(train_loss_list, val_loss_list, early_stopping_iter, plot_path, epoch_nr)

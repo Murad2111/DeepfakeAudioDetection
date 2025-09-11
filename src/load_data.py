@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import data_transform_parquet
+import math
 
 
 class MyDataset(Dataset): #because our features have variate sequence length
