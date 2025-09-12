@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
@@ -26,7 +28,8 @@ def _pad_collate(batch):
     Xs, ys = zip(*batch)
 
     #max_len = max(x.shape[1] for x in Xs)  #replace with largest across whole dataset maybe if conv dimensions have trouble
-    max_len = 414 #longest sequence in our dataset +1
+    #max_len = 414 #longest sequence in our dataset +1
+    max_len = 1650
 
     # Pad all to max_len along time axis
     Xs_padded = [] #paddings for all x in batch
@@ -43,14 +46,15 @@ def _pad_collate(batch):
     return Xs_padded, ys
 
 
-def create_data_loaders(path, batch_size=16):
+def create_data_loaders(path, conversion_function, batch_size=16):
     """
     creates dataloaders from the processed npy files
     :param path: path to files (str)
+    :param conversion_function: the funcion used to convert audio -> spectrogram
     :param batch_size: size of the batches :) int
     :return: test_dataloader, train_dataloader, val_dataloader all are torch.utils.data.DataLoader
     """
-    data_transform_parquet.check_processed_datasets(path)
+    data_transform_parquet.check_processed_datasets(path, conversion_function)
 
     test_features = np.load(path + r"\test_features.npy", allow_pickle=True)
     test_labels= np.load(path + r"\test_labels.npy", allow_pickle=True)
@@ -82,3 +86,9 @@ def _find_largest_sequence(test_loader, train_loader, val_loader):
             if max < cur_longest:
                 max = cur_longest
     return max
+
+
+if __name__ == "__main__":
+    path = os.getcwd() + r"\..\data\processed\CQCC"
+    test_loader, train_loader, val_loader = create_data_loaders(path, data_transform_parquet.audio_to_cqcc, batch_size=1)
+    print(_find_largest_sequence(test_loader, train_loader, val_loader))

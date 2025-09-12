@@ -3,7 +3,7 @@ from tqdm.auto import tqdm
 import torch
 import numpy as np
 import os
-import load_data
+import load_data, data_transform_parquet
 import gc
 import plotting
 
@@ -46,7 +46,10 @@ class ConvNet(torch.nn.Module):
             pool,
             nn.Conv2d(in_channels=16, out_channels=32, kernel_size=kernel_size), act_fn,
             ResidualBlock(32, 32, kernel_size, act_fn=act_fn),
-            #ResidualBlock(32, 32, kernel_size, act_fn=act_fn),#maybe overkill
+            pool,
+            ResidualBlock(32, 32, kernel_size, act_fn=act_fn),#maybe overkill
+            pool,
+            ResidualBlock(32, 32, kernel_size, act_fn=act_fn),  # maybe overkill
             pool,
             nn.Conv2d(in_channels=32, out_channels=16, kernel_size=kernel_size), act_fn,
             pool,
@@ -54,7 +57,7 @@ class ConvNet(torch.nn.Module):
 
         self.fullyConnected = nn.Sequential(
             #nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
-            nn.Linear(10400, 120),
+            nn.Linear(16000, 120),
             act_fn,
             nn.Linear(120, 84),
             act_fn,
@@ -218,8 +221,9 @@ def test_nn(network, test_loader, device):
 
 
 if __name__ == "__main__":
-    path = os.getcwd() + r"\..\data\processed\parquet"
-    test_loader, train_loader, val_loader = load_data.create_data_loaders(path, batch_size=8)
+    path = os.getcwd() + r"\..\data\processed\CQCC"
+    test_loader, train_loader, val_loader = (
+        load_data.create_data_loaders(path, data_transform_parquet.audio_to_cqcc, batch_size=8))
     #longest_sequence = load_data._find_largest_sequence(test_loader, train_loader, val_loader)
     #print("longest sequence in the dataset: " + str(longest_sequence))
 
@@ -228,16 +232,16 @@ if __name__ == "__main__":
     model = ConvNet().to(device)
     checkpoint_path = os.getcwd() + r"\..\checkpoints"
     train_loss_list, train_acc_list, val_loss_list, val_acc_list, early_stopping_iter, epoch_nr = (
-        train(model, test_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-4))  #training
+        train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-4))  #training
 
     plot_path = os.getcwd() + r"\..\plots"
     plotting.plot_loss(train_loss_list, val_loss_list, early_stopping_iter, plot_path, epoch_nr)
     plotting.plot_acc(train_acc_list, val_acc_list, early_stopping_iter, plot_path, epoch_nr)
 
-    #del train_loader, val_loader  #free up memory
+    del train_loader, val_loader  #free up memory
     torch.cuda.empty_cache()
     gc.collect()
 
     model = ConvNet().to(device)  # init the model
     model.load_state_dict(torch.load(checkpoint_path + r"\model.pt"))
-    test_nn(model, train_loader, device)
+    test_nn(model, test_loader, device)

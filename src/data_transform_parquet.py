@@ -6,6 +6,8 @@ import soundfile as sf
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import numpy as np
+from scipy.fftpack import dct
+import warnings
 
 #pyarrow needs to be installed
 
@@ -25,16 +27,36 @@ def audio_to_mfcc(audio_dict, n_mfcc=13, sr=16000):
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
     return mfcc
 
-def visualize_mfcc(mfcc):
+
+def audio_to_cqcc(audio_dict, n_coeffiecients=20, hop_length=128, fmin=20, n_bins=96, bins_per_octave=12):
+    """
+    Convert audio to CQCC spectrogram.
+    Returns: CQCC array [n_coeffiecients x time]
+    """
+    audio_bytes = io.BytesIO(audio_dict["bytes"])
+    y, sr = sf.read(audio_bytes, dtype='float32')
+    # If stereo, take mean to make it mono
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+
+    warnings.filterwarnings("ignore", message="n_fft=.* is too large")
+    C = np.abs(librosa.cqt(y, sr=sr, hop_length=hop_length, fmin=fmin, n_bins=n_bins, bins_per_octave=bins_per_octave))
+    log_C = np.log(C + 1e-8)
+    cqcc = dct(log_C, type=2, axis=0, norm='ortho')
+    cqcc = cqcc[:n_coeffiecients, :]  #only keep first n coefficients
+    return cqcc
+
+
+def visualize_spectrogram(spectrogram):
     plt.figure(figsize=(10, 4))
-    librosa.display.specshow(mfcc, x_axis='time')
+    librosa.display.specshow(spectrogram, x_axis='time')
     plt.colorbar()
-    plt.title('MFCC')
+    plt.title('Spectrogram')
     plt.tight_layout()
     plt.show()
 
 
-def convert_dataset():
+def convert_dataset(conversion_function):
     """
     converts the whole dataset to mfcc
     :return: (pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
@@ -53,9 +75,9 @@ def convert_dataset():
     ret_val_label = df_val["key"]
 
     tqdm.pandas()
-    ret_test_mfcc = df_test['audio'].progress_apply(audio_to_mfcc)
-    ret_train_mfcc = df_train['audio'].progress_apply(audio_to_mfcc)
-    ret_val_mfcc = df_val['audio'].progress_apply(audio_to_mfcc)
+    ret_test_mfcc = df_test['audio'].progress_apply(conversion_function)
+    ret_train_mfcc = df_train['audio'].progress_apply(conversion_function)
+    ret_val_mfcc = df_val['audio'].progress_apply(conversion_function)
 
     return  ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc
 
@@ -84,14 +106,15 @@ def do_files_exist(path):
     return os.path.isfile(path+ r"\val_features.npy")
 
 
-def check_processed_datasets(path):
+def check_processed_datasets(path, conversion_function):
     """
     makes sure all necessary datasets exist
     """
     if not do_files_exist(path):
         print("processed datasets does not exist yet")
         print("-----------------converting datasets-------------------------")
-        ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc = convert_dataset()
+        (ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc,
+         ret_val_mfcc) = convert_dataset(conversion_function)
         safe_dataset(ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc, path)
         print("--------------finished converting datasets------------------")
     else:
@@ -118,11 +141,12 @@ def do_some_tests():
     print(audioData[0].keys())
 
     tqdm.pandas()
-    df['mfcc'] = df['audio'].progress_apply(audio_to_mfcc)
-    visualize_mfcc(df["mfcc"].iloc[0])
+    #df['mfcc'] = df['audio'].progress_apply(audio_to_cqcc)
+    #visualize_spectrogram(df["mfcc"].iloc[0])
+    visualize_spectrogram(audio_to_cqcc(df['audio'].iloc[0]))
 
 
 if __name__ == "__main__":
     #do_some_tests()
-    path = os.getcwd() + r"\..\data\processed\parquet"
-    check_processed_datasets(path)
+    path = os.getcwd() + r"\..\data\processed\CQCC"
+    check_processed_datasets(path, audio_to_cqcc)

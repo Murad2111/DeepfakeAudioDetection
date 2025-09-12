@@ -20,7 +20,7 @@ def plot_loss(train_losses, val_losses, early_stop, path, num_epochs):
     plt.title("Training & Validation Loss")
     plt.legend()
     plt.grid(True)
-    plt.ylim(0.0, 1.5)
+    plt.ylim(0.0, 1.0)
     plt.savefig(path+r"\loss.png")
 
 
@@ -43,4 +43,5 @@ def plot_acc(train_acc, val_acc, early_stop, path, num_epochs):
     plt.title("Training & Validation Accuracy")
     plt.legend()
     plt.grid(True)
+    plt.ylim(60, 100)
     plt.savefig(path+r"\acc.png")
