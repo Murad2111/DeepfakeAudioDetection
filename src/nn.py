@@ -9,14 +9,19 @@ import plotting
 
 #-----------------------------classes--------------------------------------------------------------
 class ResidualBlock(nn.Module):
-    def __init__(self, inout_channels, hidden_channels, act_fn=nn.ReLU(), kernel_size=2):
+    def __init__(self, inout_channels, hidden_channels, kernel_size, act_fn=nn.ReLU()):
         super().__init__()
+        pad = 0
+        if type(kernel_size) == int:
+            pad = int(kernel_size/2)
+        elif type(kernel_size) == tuple:
+            pad = (int(kernel_size[0]/2), int(kernel_size[1]/2))
         self.conv = nn.Sequential(
-            nn.Conv2d(inout_channels, hidden_channels, kernel_size=kernel_size, padding=int(kernel_size/2)),
+            nn.Conv2d(inout_channels, hidden_channels, kernel_size=kernel_size, padding=pad),
             act_fn,
-            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=kernel_size, padding=int(kernel_size/2)),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=kernel_size, padding=pad),
             act_fn,
-            nn.Conv2d(hidden_channels, inout_channels, kernel_size=kernel_size, padding=int(kernel_size/2)),
+            nn.Conv2d(hidden_channels, inout_channels, kernel_size=kernel_size, padding=pad),
             act_fn
         )
 
@@ -24,6 +29,7 @@ class ResidualBlock(nn.Module):
         out = self.conv(x)
         out = out[:, :, :x.size(2), :x.size(3)]
         return x + out  # residual connection
+
 
 
 class ConvNet(torch.nn.Module):
@@ -34,22 +40,21 @@ class ConvNet(torch.nn.Module):
         super().__init__()
         act_fn = nn.ReLU()
         pool = nn.MaxPool2d(kernel_size=(1,2), stride=(1,2))#not symmetric because our input dimensions are (13,400) worst case
+        kernel_size=(1,2)
         self.convLayers = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=2), act_fn,
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=kernel_size), act_fn,
             pool,
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=2), act_fn,
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=kernel_size), act_fn,
+            ResidualBlock(32, 32, kernel_size, act_fn=act_fn),
+            #ResidualBlock(32, 32, kernel_size, act_fn=act_fn),#maybe overkill
             pool,
-            ResidualBlock(32, 32, act_fn=act_fn),
-            pool,
-            ResidualBlock(32, 32, act_fn=act_fn),#maybe overkill
-            pool,
-            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=2), act_fn,
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=kernel_size), act_fn,
             pool,
         )
 
         self.fullyConnected = nn.Sequential(
             #nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
-            nn.Linear(1920, 120),
+            nn.Linear(10400, 120),
             act_fn,
             nn.Linear(120, 84),
             act_fn,
@@ -58,10 +63,15 @@ class ConvNet(torch.nn.Module):
         )
 
     def forward(self, x):
-        x = self.convLayers(x)
+        time_x = self.convLayers(x)
+        #freq_x = self.convFrequencyLayers(x)
 
         # flatten the convolution results
-        x = x.view(x.size(0), -1)  #out_channels*x_cur*y_cur
+        time_x = time_x.view(time_x.size(0), -1)  #out_channels*x_cur*y_cur
+        #freq_x = freq_x.view(freq_x.size(0), -1)
+
+        x = time_x
+        #x= torch.cat((time_x, freq_x), dim=1)
 
         x = self.fullyConnected(x)
 
@@ -218,16 +228,16 @@ if __name__ == "__main__":
     model = ConvNet().to(device)
     checkpoint_path = os.getcwd() + r"\..\checkpoints"
     train_loss_list, train_acc_list, val_loss_list, val_acc_list, early_stopping_iter, epoch_nr = (
-        train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-5))  #training
+        train(model, test_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-4))  #training
 
     plot_path = os.getcwd() + r"\..\plots"
     plotting.plot_loss(train_loss_list, val_loss_list, early_stopping_iter, plot_path, epoch_nr)
     plotting.plot_acc(train_acc_list, val_acc_list, early_stopping_iter, plot_path, epoch_nr)
 
-    del train_loader, val_loader  #free up memory
+    #del train_loader, val_loader  #free up memory
     torch.cuda.empty_cache()
     gc.collect()
 
     model = ConvNet().to(device)  # init the model
     model.load_state_dict(torch.load(checkpoint_path + r"\model.pt"))
-    test_nn(model, test_loader, device)
+    test_nn(model, train_loader, device)
