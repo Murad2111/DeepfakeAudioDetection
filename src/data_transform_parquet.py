@@ -1,3 +1,5 @@
+import gc
+
 import pandas as pd
 import os
 import librosa
@@ -8,6 +10,7 @@ from tqdm import tqdm
 import numpy as np
 from scipy.fftpack import dct
 import warnings
+from pandarallel import pandarallel
 
 #pyarrow needs to be installed
 
@@ -33,6 +36,9 @@ def audio_to_cqcc(audio_dict, n_coeffiecients=20, hop_length=128, fmin=20, n_bin
     Convert audio to CQCC spectrogram.
     Returns: CQCC array [n_coeffiecients x time]
     """
+    import io, warnings, librosa
+    import numpy as np
+    import soundfile as sf
     audio_bytes = io.BytesIO(audio_dict["bytes"])
     y, sr = sf.read(audio_bytes, dtype='float32')
     # If stereo, take mean to make it mono
@@ -41,7 +47,8 @@ def audio_to_cqcc(audio_dict, n_coeffiecients=20, hop_length=128, fmin=20, n_bin
 
     warnings.filterwarnings("ignore", message="n_fft=.* is too large")
     C = np.abs(librosa.cqt(y, sr=sr, hop_length=hop_length, fmin=fmin, n_bins=n_bins, bins_per_octave=bins_per_octave))
-    log_C = np.log(C + 1e-8)
+    #return C   # if we want to visualize it
+    log_C = np.log(C + 1e-8)        #for numerical stuff so that all the values are not too far apart (distance is kept)
     cqcc = dct(log_C, type=2, axis=0, norm='ortho')
     cqcc = cqcc[:n_coeffiecients, :]  #only keep first n coefficients
     return cqcc
@@ -74,10 +81,14 @@ def convert_dataset(conversion_function):
     ret_train_label = df_train["key"]
     ret_val_label = df_val["key"]
 
-    tqdm.pandas()
-    ret_test_mfcc = df_test['audio'].progress_apply(conversion_function)
-    ret_train_mfcc = df_train['audio'].progress_apply(conversion_function)
-    ret_val_mfcc = df_val['audio'].progress_apply(conversion_function)
+    #tqdm.pandas()
+    pandarallel.initialize(progress_bar=True, nb_workers=8)
+    ret_test_mfcc = df_test['audio'].parallel_apply(conversion_function)
+    gc.collect()
+    ret_train_mfcc = df_train['audio'].parallel_apply(conversion_function)
+    gc.collect()
+    ret_val_mfcc = df_val['audio'].parallel_apply(conversion_function)
+    gc.collect()
 
     return  ret_test_label, ret_train_label, ret_val_label, ret_test_mfcc, ret_train_mfcc, ret_val_mfcc
 
@@ -143,10 +154,10 @@ def do_some_tests():
     tqdm.pandas()
     #df['mfcc'] = df['audio'].progress_apply(audio_to_cqcc)
     #visualize_spectrogram(df["mfcc"].iloc[0])
-    visualize_spectrogram(audio_to_cqcc(df['audio'].iloc[0]))
+    visualize_spectrogram(audio_to_cqcc(df['audio'].iloc[0], n_coeffiecients=20))
 
 
 if __name__ == "__main__":
     #do_some_tests()
-    path = os.getcwd() + r"\..\data\processed\CQCC"
+    path = os.getcwd() + r"\..\data\processed\CQCC2"
     check_processed_datasets(path, audio_to_cqcc)

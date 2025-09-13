@@ -57,7 +57,7 @@ class ConvNet(torch.nn.Module):
 
         self.fullyConnected = nn.Sequential(
             #nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
-            nn.Linear(16000, 120),
+            nn.Linear(76800, 120),
             act_fn,
             nn.Linear(120, 84),
             act_fn,
@@ -81,6 +81,63 @@ class ConvNet(torch.nn.Module):
         return x
 
 
+class BiCorrelationConvNet(torch.nn.Module):
+    """
+    change this later
+    """
+    def __init__(self):
+        super().__init__()
+        act_fn = nn.ReLU()
+        pool = nn.MaxPool2d(kernel_size=(1,2), stride=(1,2))#not symmetric because our input dimensions are (13,400) worst case
+        time_kernel_size=(1,2)
+        self.timeCorrelationLayers = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=time_kernel_size), act_fn,
+            pool,
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=time_kernel_size), act_fn,
+            #ResidualBlock(32, 32, time_kernel_size, act_fn=act_fn),
+            pool,
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=time_kernel_size), act_fn,
+            pool,
+        )
+        self.timeToVector = nn.Linear(65600, 1000)
+
+        coefficient_kernel_size=(6,1)
+        self.coefficientCorrelationLayers = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=coefficient_kernel_size), act_fn,
+            pool,
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=coefficient_kernel_size), act_fn,
+            #ResidualBlock(32, 32, coefficient_kernel_size, act_fn=act_fn),
+            pool,
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=coefficient_kernel_size), act_fn,
+            pool,
+        )
+        self.coeffiecientToVector = nn.Linear(16480, 1000)
+
+        self.correlationNetwork = nn.Sequential(
+            #nn.Linear(4000, 120),  # out_channels*x_cur*y_cur
+            nn.Linear(2000, 240),
+            act_fn,
+            nn.Linear(240, 1),
+            nn.Sigmoid(),#for probability as output
+        )
+
+    def forward(self, x):
+        time_x = self.timeCorrelationLayers(x)
+        # flatten the convolution results
+        time_x = time_x.view(time_x.size(0), -1)  #out_channels*x_cur*y_cur
+        vec_time = self.timeToVector(time_x)
+
+        freq_x = self.coefficientCorrelationLayers(x)
+        freq_x = freq_x.view(time_x.size(0), -1)
+        vec_freq = self.coeffiecientToVector(freq_x)
+
+        x= torch.cat((vec_time, vec_freq), dim=1)
+
+        x = self.correlationNetwork(x)
+
+        return x
+
+
 #------------------------------utility functions----------------------------------------
 def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-4, regularization=1e-4):
     """
@@ -98,7 +155,7 @@ def train(network, train_loader, val_loader, device, checkpoint_path, epochs=200
 
     best_model_valid_loss = np.Inf
     num_epochs_without_val_loss_reduction = 0
-    early_stopping_window = 5
+    early_stopping_window = 3
 
     running_train_loss = 0
     running_val_loss = 0
@@ -229,19 +286,26 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("using device: " + str(device))
-    model = ConvNet().to(device)
+    #model = ConvNet().to(device)
+    model = BiCorrelationConvNet().to(device)
+
+    #---------------------------------train---------------------------
+    #comment this+plot out if you just want to test
     checkpoint_path = os.getcwd() + r"\..\checkpoints"
     train_loss_list, train_acc_list, val_loss_list, val_acc_list, early_stopping_iter, epoch_nr = (
         train(model, train_loader, val_loader, device, checkpoint_path, epochs=200, lr=1e-4))  #training
 
+    #---------------------------------plot-----------------------------
     plot_path = os.getcwd() + r"\..\plots"
     plotting.plot_loss(train_loss_list, val_loss_list, early_stopping_iter, plot_path, epoch_nr)
     plotting.plot_acc(train_acc_list, val_acc_list, early_stopping_iter, plot_path, epoch_nr)
 
+    #------------------------------cleanup-----------------------------
     del train_loader, val_loader  #free up memory
     torch.cuda.empty_cache()
     gc.collect()
 
-    model = ConvNet().to(device)  # init the model
+    #-----------------------------test-------------------------------
+    #model = ConvNet().to(device)  # init the model
     model.load_state_dict(torch.load(checkpoint_path + r"\model.pt"))
     test_nn(model, test_loader, device)
