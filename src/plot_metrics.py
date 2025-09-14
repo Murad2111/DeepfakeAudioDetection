@@ -28,7 +28,7 @@ def plot_pr_curve(labels, probs, path):
 
 def plot_confusion_matrix(cm, path):
     plt.clf()
-    # plt.figure(figsize=(5,5))
+    plt.figure(figsize=(6,6))
     plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
     plt.title("Confusion Matrix", fontsize=14)
     plt.colorbar()

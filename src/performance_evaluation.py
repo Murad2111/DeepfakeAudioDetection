@@ -103,4 +103,4 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
 
     # evaluate
-    evaluate_model(model, test_loader, device, plots_dir=os.getcwd() + r"\plots")
+    evaluate_model(model, test_loader, device)
