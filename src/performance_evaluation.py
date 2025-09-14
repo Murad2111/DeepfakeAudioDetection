@@ -57,15 +57,14 @@ def compute_tDCF(y_true, y_score, Pfa_asv=0.01, Pmiss_asv=0.01,
     return min_results
 
 #-------------------------------Evaluate Model-----------------------------------
-def evaluate_model(network, data_loader, device):
-    network.eval()
-    all_labels = []
-    all_probs = []
+def evaluate_model(model, data_loader, device):
+    model.eval()
+    all_labels, all_probs = [], []
 
     with torch.no_grad():
         for x, y in tqdm(data_loader, desc="Evaluating"):
             x, y = x.to(device), y.to(device)
-            out_prob = network(x).squeeze()
+            out_prob = model(x).squeeze()
             all_probs.extend(out_prob.cpu().numpy().tolist())
             all_labels.extend(y.squeeze().cpu().numpy().tolist())
 
@@ -74,7 +73,6 @@ def evaluate_model(network, data_loader, device):
     preds = (all_probs > 0.5).astype(int)
 
     cm = confusion_matrix(all_labels, preds.reshape(-1).round())
-
     auc = roc_auc_score(all_labels, all_probs)
     eer = compute_eer(all_labels, all_probs)
     tDCF_results = compute_tDCF(all_labels, all_probs)
