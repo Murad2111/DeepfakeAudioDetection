@@ -57,4 +57,41 @@ These metrics are standard for spoofed audio detection and allow comparison with
 ```bash
 git clone https://github.com/Murad2111/DeepfakeAudioDetection.git
 
+2. Preprocess data:
+Open notebooks/data_preprocessing.ipynb in Jupyter Notebook or VSCode.
+Execute all cells sequentially.
+
+This will generate processed features and labels in data/processed/:
+train_features.npy, train_labels.npy
+dev_features.npy, dev_labels.npy
+eval_features.npy, eval_labels.npy
+
+4. Train model:
+from train import train_cnn_model
+train_cnn_model(
+    train_features='data/processed/train_features.npy',
+    train_labels='data/processed/train_labels.npy',
+    val_features='data/processed/dev_features.npy',
+    val_labels='data/processed/dev_labels.npy',
+    epochs=20,
+    batch_size=32,
+    lr=0.001
+)
+
+
+5. Evaluate model:
+from evaluate import evaluate_model
+metrics = evaluate_model(
+    features='data/processed/eval_features.npy',
+    labels='data/processed/eval_labels.npy',
+    model_path='saved_models/cnn_model.pth'
+)
+print(metrics)
+
+
+## Notes
+- CQCC features gave slightly better results than MFCC for spoof detection.
+- Preprocessed .npy files allow fast experimentation without re-extracting features.
+- Evaluation uses standard ASVspoof metrics (EER, t-DCF) for fair comparison with published work.
+- The baseline CNN model achieves ~90% test accuracy using CQCC features.
 
